@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Map</title>
+    <meta name="viewport" content="initial-scale=1.0">
+    <meta charset="utf-8">
+    <script src="//cdn.jsdelivr.net/bluebird/3.5.0/bluebird.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.22.1/moment.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCKtd0_SPZ_TvawZBPFIzx3lrqG2b6ZVUw&callback=initMap" async defer></script>
+    <style>
+        form {
+            display: flex;
+            flex-direction: column;
+            width: 300px;
+        }
+        form input {
+            margin: 5px 0;
+        }
+        div {
+            display: flex;
+            justify-content: space-between;
+            width: 300px;
+        }
+        span {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+        br {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div>Enter Office Address:</div>
+    <form name="officeAddress">
+        <input name="city" type="text" value="Киев" disabled />
+        <input name="street" type="text" placeholder="пр. Победы" />
+        <input name="house" type="text" placeholder="1"/>
+
+        <button type="submit">Calculate</button>
+    </form>
+    <br>
+    <div>Employees: <span id="employees"></span></div>
+    <br>
+    <div>Total distance: <span id="distance"></span></div>
+    <div>Total duration: <span id="duration"></span></div>
+    <br>
+    <div>Avarage distance: <span id="avgDistance"></span></div>
+    <div>Avarage duration: <span id="avgDuration"></span></div>
+<script>
+    var DRIVING = 'DRIVING';
+    var TRANSIT = 'TRANSIT';
+    var WALKING = 'WALKING';
+
+    function initMap() {
+        var form = document.forms['officeAddress'];
+        form.addEventListener('submit', onSubmit)
+    }
+
+    function onSubmit(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        var employeesAddresses = [{
+                type: DRIVING,
+                city: 'Киев',
+                street: 'Победы ул',
+                house: '1',
+            },
+            {
+                type: TRANSIT,
+                city: 'Киев',
+                street: 'Крещатик ул',
+                house: '1',
+            },
+            {
+                type: DRIVING,
+                city: 'Киев',
+                street: 'Мельникова',
+                house: '20',
+            },
+            {
+                type: TRANSIT,
+                city: 'Киев',
+                street: 'Маршала Тимошенко',
+                house: '50',
+            },
+            {
+                type: DRIVING,
+                city: 'Киев',
+                street: 'Васильковская',
+                house: '20',
+            },
+            {
+                type: TRANSIT,
+                city: 'Киев',
+                street: 'Васильковская',
+                house: '20',
+            }
+        ];
+
+        var form = document.forms['officeAddress'];
+        var officeAddress = [{
+            city: form.elements['city'].value,
+            street: form.elements['street'].value,
+            house: form.elements['house'].value,
+        }];
+
+        if (!officeAddress[0].street || !officeAddress[0].house) return alert('All fields are required');
+
+        getGeocodes(officeAddress).then(function(officeLocation) {
+            return getGeocodes(employeesAddresses).then(function(employeesLocations) {
+                return calculateTimeSpace(officeLocation, employeesLocations).then(function(results) {
+                    var metrics = results.reduce(function(acc, item) {
+                        acc.distance += item.distance.value;
+                        acc.duration += item.duration.value;
+                        acc.count++;
+                        return acc;
+                    }, {
+                        distance: 0,
+                        duration: 0,
+                        count: 0,
+                    });
+
+                    metrics.avgDistance = metrics.distance / metrics.count;
+                    metrics.avgDuration = metrics.duration / metrics.count;
+
+                    document.getElementById('employees').innerHTML = metrics.count;
+                    document.getElementById('distance').innerHTML = (metrics.distance / 1000) + ' km';
+                    document.getElementById('duration').innerHTML = moment.duration(metrics.duration, 'seconds').humanize();
+                    document.getElementById('avgDistance').innerHTML = (metrics.avgDistance / 1000) + ' km';
+                    document.getElementById('avgDuration').innerHTML = moment.duration(metrics.avgDuration, 'seconds').humanize();
+                });
+            });
+        });
+    }
+
+    function calculateTimeSpace(officeLocation, employeesLocations) {
+        var service = new google.maps.DistanceMatrixService();
+        var nextWednesday = moment().day(3).set('hour', 10).set('minute', 0).toDate();
+
+        var promises = employeesLocations.map(function(employeeLocation) {
+            return new Promise(function(resolve, reject) {
+                var options = {
+                    origins: [employeeLocation],
+                    destinations: [officeLocation[0]],
+                    travelMode: employeeLocation.type,
+
+                };
+                if (employeeLocation.type === TRANSIT) {
+                    options.drivingOptions = {
+                        departureTime: nextWednesday,
+                    }
+                }
+                if (employeeLocation.type === DRIVING) {
+                    options.transitOptions = {
+                        departureTime: nextWednesday,
+                    }
+                }
+                service.getDistanceMatrix(options, function (response, status) {
+                        if (status === 'OK') {
+                            var location = response.rows[0].elements[0];
+                            return resolve(location);
+                        } else {
+                            return reject(status)
+                        }
+                    });
+            });
+        });
+
+        return Promise.resolve(Promise.all(promises));
+    }
+
+    function getGeocodes(addresses) {
+        var geocoder = new google.maps.Geocoder();
+        var promises = addresses.map(function(address) {
+            return new Promise(function(resolve, reject) {
+                geocoder.geocode({
+                    address: [address.city, address.street, address.house].join(' ')
+                }, function(results, status) {
+                    if (status === 'OK') {
+                        var location = results[0].geometry.location;
+                        return resolve({
+                            type: address.type ? address.type : TRANSIT,
+                            lat: location.lat(),
+                            lng: location.lng(),
+                        });
+                    } else {
+                        return reject(status)
+                    }
+                })
+            })
+        });
+
+        return Promise.resolve(Promise.all(promises));
+    }
+</script>
+</body>
+</html>
